@@ -17,18 +17,13 @@ from drgn import (
     TypeEnumerator,
     TypeKind,
     TypeMember,
-    class_type,
-    enum_type,
-    float_type,
-    int_type,
-    struct_type,
-    typedef_type,
-    union_type,
 )
 
 DEFAULT_LANGUAGE = Language.C
 
 
+# TODO
+"""
 coord_type = class_type(
     "coord",
     12,
@@ -63,6 +58,7 @@ color_type = enum_type(
     (TypeEnumerator("RED", 0), TypeEnumerator("GREEN", 1), TypeEnumerator("BLUE", 2)),
 )
 pid_type = typedef_type("pid_t", int_type("int", 4, True))
+"""
 
 
 MOCK_32BIT_PLATFORM = Platform(Architecture.UNKNOWN, PlatformFlags.IS_LITTLE_ENDIAN)
@@ -145,7 +141,7 @@ def mock_program(platform=MOCK_PLATFORM, *, segments=None, types=None, objects=N
     return prog
 
 
-class ObjectTestCase(unittest.TestCase):
+class TestCase(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.prog = mock_program()

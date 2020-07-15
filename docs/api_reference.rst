@@ -92,6 +92,8 @@ Types
 Type Constructors
 ^^^^^^^^^^^^^^^^^
 
+.. TODO
+
 Custom drgn types can be created with the following factory functions. These
 can be used just like types obtained from :meth:`Program.type()`.
 

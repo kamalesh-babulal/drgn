@@ -90,15 +90,9 @@ class TestProgram(unittest.TestCase):
             "foo",
             "foo.c",
         )
+        self.assertRaisesRegex(LookupError, "^could not find 'foo'$", prog.type, "foo")
         self.assertRaisesRegex(
-            LookupError, "^could not find 'foo'$", prog.type, "foo"
-        )
-        self.assertRaisesRegex(
-            LookupError,
-            "^could not find 'foo' in 'foo.c'$",
-            prog.type,
-            "foo",
-            "foo.c",
+            LookupError, "^could not find 'foo' in 'foo.c'$", prog.type, "foo", "foo.c",
         )
         self.assertRaisesRegex(
             LookupError, "^could not find variable 'foo'$", prog.variable, "foo"

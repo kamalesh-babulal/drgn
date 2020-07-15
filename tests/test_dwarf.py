@@ -16,28 +16,8 @@ from drgn import (
     TypeEnumerator,
     TypeMember,
     TypeParameter,
-    array_type,
-    class_type,
-    complex_type,
-    enum_type,
-    float_type,
-    function_type,
-    int_type,
-    pointer_type,
-    struct_type,
-    typedef_type,
-    union_type,
-    void_type,
 )
-from tests import (
-    DEFAULT_LANGUAGE,
-    ObjectTestCase,
-    color_type,
-    coord_type,
-    option_type,
-    pid_type,
-    point_type,
-)
+from tests import DEFAULT_LANGUAGE, TestCase
 from tests.dwarf import DW_AT, DW_ATE, DW_FORM, DW_LANG, DW_TAG
 from tests.dwarfwriter import DwarfAttrib, DwarfDie, compile_dwarf
 
@@ -209,30 +189,34 @@ def dwarf_program(*args, **kwds):
     return prog
 
 
-class TestTypes(unittest.TestCase):
-    @staticmethod
-    def type_from_dwarf(dies, *args, **kwds):
-        if isinstance(dies, DwarfDie):
-            dies = (dies,)
-        dies = tuple(dies) + (
-            DwarfDie(
-                DW_TAG.typedef,
-                [
-                    DwarfAttrib(DW_AT.name, DW_FORM.string, "__TEST__"),
-                    DwarfAttrib(DW_AT.type, DW_FORM.ref4, 0),
-                ],
-            ),
-        )
-        prog = dwarf_program(dies, *args, **kwds)
-        return prog.type("__TEST__").type
+def test_type_dies(dies):
+    if isinstance(dies, DwarfDie):
+        dies = (dies,)
+    return tuple(dies) + (
+        DwarfDie(
+            DW_TAG.typedef,
+            [
+                DwarfAttrib(DW_AT.name, DW_FORM.string, "TEST"),
+                DwarfAttrib(DW_AT.type, DW_FORM.ref4, 0),
+            ],
+        ),
+    )
 
+
+def type_from_dwarf(dies, *args, **kwds):
+    prog = dwarf_program(test_type_dies(dies), *args, **kwds)
+    return prog.type("TEST").type
+
+
+class TestTypes(unittest.TestCase):
     def assertFromDwarf(self, dies, type, *args, **kwds):
-        self.assertEqual(self.type_from_dwarf(dies, *args, **kwds), type)
+        prog = dwarf_program(test_type_dies(dies), *args, **kwds)
+        self.assertEqual(prog.type("TEST").type, type(prog))
 
     def test_unknown_tag(self):
         die = DwarfDie(0x9999, ())
         self.assertRaisesRegex(
-            Exception, "unknown DWARF type tag 0x9999", self.type_from_dwarf, die
+            Exception, "unknown DWARF type tag 0x9999", type_from_dwarf, die
         )
 
     def test_bad_base_type(self):
@@ -249,7 +233,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_base_type has missing or invalid DW_AT_byte_size",
-            self.type_from_dwarf,
+            type_from_dwarf,
             die,
         )
         die.attribs.insert(0, byte_size)
@@ -258,7 +242,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_base_type has missing or invalid DW_AT_encoding",
-            self.type_from_dwarf,
+            type_from_dwarf,
             die,
         )
         die.attribs.insert(1, encoding)
@@ -267,7 +251,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_base_type has missing or invalid DW_AT_name",
-            self.type_from_dwarf,
+            type_from_dwarf,
             die,
         )
 
@@ -285,7 +269,10 @@ class TestTypes(unittest.TestCase):
             double_die,
         ]
         self.assertFromDwarf(
-            dies, complex_type("double _Complex", 16, float_type("double", 8))
+            dies,
+            lambda prog: prog.complex_type(
+                "double _Complex", 16, prog.float_type("double", 8)
+            ),
         )
 
     def test_unknown_base_type_encoding(self):
@@ -298,7 +285,7 @@ class TestTypes(unittest.TestCase):
             ),
         )
         self.assertRaisesRegex(
-            Exception, "unknown DWARF encoding", self.type_from_dwarf, die
+            Exception, "unknown DWARF encoding", type_from_dwarf, die
         )
 
     def test_qualifiers(self):
@@ -306,10 +293,15 @@ class TestTypes(unittest.TestCase):
             DwarfDie(DW_TAG.const_type, [DwarfAttrib(DW_AT.type, DW_FORM.ref4, 1)],),
             int_die,
         ]
-        self.assertFromDwarf(dies, int_type("int", 4, True, Qualifiers.CONST))
+        self.assertFromDwarf(
+            dies,
+            lambda prog: prog.int_type("int", 4, True, qualifiers=Qualifiers.CONST),
+        )
 
         del dies[0].attribs[0]
-        self.assertFromDwarf(dies, void_type(Qualifiers.CONST))
+        self.assertFromDwarf(
+            dies, lambda prog: prog.void_type(qualifiers=Qualifiers.CONST)
+        )
 
         dies = [
             DwarfDie(DW_TAG.const_type, [DwarfAttrib(DW_AT.type, DW_FORM.ref4, 1)],),
@@ -320,11 +312,11 @@ class TestTypes(unittest.TestCase):
         ]
         self.assertFromDwarf(
             dies,
-            int_type(
+            lambda prog: prog.int_type(
                 "int",
                 4,
                 True,
-                Qualifiers.CONST
+                qualifiers=Qualifiers.CONST
                 | Qualifiers.RESTRICT
                 | Qualifiers.VOLATILE
                 | Qualifiers.ATOMIC,
@@ -334,8 +326,8 @@ class TestTypes(unittest.TestCase):
         del dies[3].attribs[0]
         self.assertFromDwarf(
             dies,
-            void_type(
-                Qualifiers.CONST
+            lambda prog: prog.void_type(
+                qualifiers=Qualifiers.CONST
                 | Qualifiers.RESTRICT
                 | Qualifiers.VOLATILE
                 | Qualifiers.ATOMIC
@@ -372,22 +364,40 @@ class TestTypes(unittest.TestCase):
             int_die,
         ]
 
-        self.assertFromDwarf(dies, point_type)
+        self.assertFromDwarf(
+            dies,
+            lambda prog: prog.struct_type(
+                "point",
+                8,
+                (
+                    TypeMember(prog.int_type("int", 4, True), "x", 0),
+                    TypeMember(prog.int_type("int", 4, True), "y", 32),
+                ),
+            ),
+        )
 
         tag = dies[0].attribs.pop(0)
         self.assertFromDwarf(
-            dies, struct_type(None, point_type.size, point_type.members)
+            dies,
+            lambda prog: prog.struct_type(
+                None,
+                8,
+                (
+                    TypeMember(prog.int_type("int", 4, True), "x", 0),
+                    TypeMember(prog.int_type("int", 4, True), "y", 32),
+                ),
+            ),
         )
         dies[0].attribs.insert(0, tag)
 
         children = list(dies[0].children)
         dies[0].children.clear()
-        self.assertFromDwarf(dies, struct_type("point", point_type.size, ()))
+        self.assertFromDwarf(dies, lambda prog: prog.struct_type("point", 8, ()))
         size = dies[0].attribs.pop(1)
         dies[0].attribs.append(
             DwarfAttrib(DW_AT.declaration, DW_FORM.flag_present, True)
         )
-        self.assertFromDwarf(dies, struct_type("point"))
+        self.assertFromDwarf(dies, lambda prog: prog.struct_type("point"))
         del dies[0].attribs[-1]
         dies[0].attribs.insert(1, size)
         dies[0].children.extend(children)
@@ -395,12 +405,12 @@ class TestTypes(unittest.TestCase):
         name = dies[0].children[0].attribs.pop(0)
         self.assertFromDwarf(
             dies,
-            struct_type(
+            lambda prog: prog.struct_type(
                 "point",
-                point_type.size,
+                8,
                 (
-                    TypeMember(int_type("int", 4, True), None, 0),
-                    TypeMember(int_type("int", 4, True), "y", 32),
+                    TypeMember(prog.int_type("int", 4, True), None, 0),
+                    TypeMember(prog.int_type("int", 4, True), "y", 32),
                 ),
             ),
         )
@@ -411,7 +421,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_structure_type has invalid DW_AT_name",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].attribs[0] = tag
@@ -420,7 +430,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_structure_type has missing or invalid DW_AT_byte_size",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].attribs.insert(1, size)
@@ -428,10 +438,7 @@ class TestTypes(unittest.TestCase):
         name = dies[0].children[0].attribs.pop(0)
         dies[0].children[0].attribs.insert(0, DwarfAttrib(DW_AT.name, DW_FORM.data1, 0))
         self.assertRaisesRegex(
-            Exception,
-            "DW_TAG_member has invalid DW_AT_name",
-            self.type_from_dwarf,
-            dies,
+            Exception, "DW_TAG_member has invalid DW_AT_name", type_from_dwarf, dies,
         )
         dies[0].children[0].attribs[0] = name
 
@@ -442,23 +449,20 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_member has invalid DW_AT_data_member_location",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].children[0].attribs[1] = location
 
         type_ = dies[0].children[0].attribs.pop(2)
         self.assertRaisesRegex(
-            Exception, "DW_TAG_member is missing DW_AT_type", self.type_from_dwarf, dies
+            Exception, "DW_TAG_member is missing DW_AT_type", type_from_dwarf, dies
         )
         dies[0].children[0].attribs.insert(
             2, DwarfAttrib(DW_AT.type, DW_FORM.string, "foo")
         )
         self.assertRaisesRegex(
-            Exception,
-            "DW_TAG_member has invalid DW_AT_type",
-            self.type_from_dwarf,
-            dies,
+            Exception, "DW_TAG_member has invalid DW_AT_type", type_from_dwarf, dies,
         )
         dies[0].children[0].attribs[2] = type_
 
@@ -506,7 +510,19 @@ class TestTypes(unittest.TestCase):
             ),
             int_die,
         ]
-        self.assertFromDwarf(dies, pointer_type(8, point_type))
+        self.assertFromDwarf(
+            dies,
+            lambda prog: prog.pointer_type(
+                prog.struct_type(
+                    "point",
+                    8,
+                    (
+                        TypeMember(prog.int_type("int", 4, True), "x"),
+                        TypeMember(prog.int_type("int", 4, True), "y", 32),
+                    ),
+                )
+            ),
+        )
 
         # Ambiguous incomplete type.
         dies.append(
@@ -537,8 +553,9 @@ class TestTypes(unittest.TestCase):
                 ],
             )
         )
-        type_ = pointer_type(8, struct_type("point"))
-        self.assertFromDwarf(dies, type_)
+        self.assertFromDwarf(
+            dies, lambda prog: prog.pointer_type(prog.struct_type("point"))
+        )
 
     def test_filename(self):
         dies = list(base_type_dies) + [
@@ -604,12 +621,20 @@ class TestTypes(unittest.TestCase):
             ),
         ]
 
-        other_point_type = struct_type(
+        point_type = lambda prog: prog.struct_type(
             "point",
             8,
             (
-                TypeMember(int_type("int", 4, True), "a"),
-                TypeMember(int_type("int", 4, True), "b", 32),
+                TypeMember(prog.int_type("int", 4, True), "x"),
+                TypeMember(prog.int_type("int", 4, True), "y", 32),
+            ),
+        )
+        other_point_type = lambda prog: prog.struct_type(
+            "point",
+            8,
+            (
+                TypeMember(prog.int_type("int", 4, True), "a"),
+                TypeMember(prog.int_type("int", 4, True), "b", 32),
             ),
         )
 
@@ -617,13 +642,14 @@ class TestTypes(unittest.TestCase):
         for dir in ["", "src", "usr/src", "/usr/src"]:
             with self.subTest(dir=dir):
                 self.assertEqual(
-                    prog.type("struct point", os.path.join(dir, "foo.c")), point_type
+                    prog.type("struct point", os.path.join(dir, "foo.c")),
+                    point_type(prog),
                 )
         for dir in ["", "bar", "src/bar", "usr/src/bar", "/usr/src/bar"]:
             with self.subTest(dir=dir):
                 self.assertEqual(
                     prog.type("struct point", os.path.join(dir, "baz.c")),
-                    other_point_type,
+                    other_point_type(prog),
                 )
 
         dies[len(base_type_dies)].attribs[-1] = DwarfAttrib(
@@ -636,18 +662,20 @@ class TestTypes(unittest.TestCase):
         for dir in ["xy", "src/xy", "usr/src/xy", "/usr/src/xy"]:
             with self.subTest(dir=dir):
                 self.assertEqual(
-                    prog.type("struct point", os.path.join(dir, "foo.h")), point_type
+                    prog.type("struct point", os.path.join(dir, "foo.h")),
+                    point_type(prog),
                 )
         for dir in ["ab", "include/ab", "usr/include/ab", "/usr/include/ab"]:
             with self.subTest(dir=dir):
                 self.assertEqual(
                     prog.type("struct point", os.path.join(dir, "foo.h")),
-                    other_point_type,
+                    other_point_type(prog),
                 )
         for filename in [None, "foo.h"]:
             with self.subTest(filename=filename):
                 self.assertIn(
-                    prog.type("struct point", filename), (point_type, other_point_type)
+                    prog.type("struct point", filename),
+                    (point_type(prog), other_point_type(prog)),
                 )
 
     def test_bit_field(self):
@@ -690,13 +718,13 @@ class TestTypes(unittest.TestCase):
             int_die,
         ]
 
-        t = struct_type(
+        t = lambda prog: prog.struct_type(
             "point",
             8,
             [
-                TypeMember(int_type("int", 4, True), "x", 0),
-                TypeMember(int_type("int", 4, True), "y", 32, 12),
-                TypeMember(int_type("int", 4, True), "z", 44, 20),
+                TypeMember(prog.int_type("int", 4, True), "x", 0),
+                TypeMember(prog.int_type("int", 4, True), "y", 32, 12),
+                TypeMember(prog.int_type("int", 4, True), "z", 44, 20),
             ],
         )
 
@@ -769,14 +797,24 @@ class TestTypes(unittest.TestCase):
             float_die,
         ]
 
-        self.assertFromDwarf(dies, option_type)
+        self.assertFromDwarf(
+            dies,
+            lambda prog: prog.union_type(
+                "option",
+                4,
+                (
+                    TypeMember(prog.int_type("int", 4, True), "i"),
+                    TypeMember(prog.float_type("float", 4), "f"),
+                ),
+            ),
+        )
 
         tag = dies[0].attribs.pop(0)
         dies[0].attribs.insert(0, DwarfAttrib(DW_AT.name, DW_FORM.data1, 0))
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_union_type has invalid DW_AT_name",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].attribs[0] = tag
@@ -785,7 +823,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_union_type has missing or invalid DW_AT_byte_size",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].attribs.insert(1, size)
@@ -828,22 +866,42 @@ class TestTypes(unittest.TestCase):
             int_die,
         ]
 
-        self.assertFromDwarf(dies, coord_type)
+        self.assertFromDwarf(
+            dies,
+            lambda prog: prog.class_type(
+                "coord",
+                12,
+                (
+                    TypeMember(prog.int_type("int", 4, True), "x", 0),
+                    TypeMember(prog.int_type("int", 4, True), "y", 32),
+                    TypeMember(prog.int_type("int", 4, True), "z", 64),
+                ),
+            ),
+        )
 
         tag = dies[0].attribs.pop(0)
         self.assertFromDwarf(
-            dies, class_type(None, coord_type.size, coord_type.members)
+            dies,
+            lambda prog: prog.class_type(
+                None,
+                12,
+                (
+                    TypeMember(prog.int_type("int", 4, True), "x", 0),
+                    TypeMember(prog.int_type("int", 4, True), "y", 32),
+                    TypeMember(prog.int_type("int", 4, True), "z", 64),
+                ),
+            ),
         )
         dies[0].attribs.insert(0, tag)
 
         children = list(dies[0].children)
         dies[0].children.clear()
-        self.assertFromDwarf(dies, class_type("coord", coord_type.size, ()))
+        self.assertFromDwarf(dies, lambda prog: prog.class_type("coord", 12, ()))
         size = dies[0].attribs.pop(1)
         dies[0].attribs.append(
             DwarfAttrib(DW_AT.declaration, DW_FORM.flag_present, True)
         )
-        self.assertFromDwarf(dies, class_type("coord"))
+        self.assertFromDwarf(dies, lambda prog: prog.class_type("coord"))
         del dies[0].attribs[-1]
         dies[0].attribs.insert(1, size)
         dies[0].children.extend(children)
@@ -851,13 +909,13 @@ class TestTypes(unittest.TestCase):
         name = dies[0].children[0].attribs.pop(0)
         self.assertFromDwarf(
             dies,
-            class_type(
+            lambda prog: prog.class_type(
                 "coord",
-                coord_type.size,
+                12,
                 (
-                    TypeMember(int_type("int", 4, True), None, 0),
-                    TypeMember(int_type("int", 4, True), "y", 32),
-                    TypeMember(int_type("int", 4, True), "z", 64),
+                    TypeMember(prog.int_type("int", 4, True), None, 0),
+                    TypeMember(prog.int_type("int", 4, True), "y", 32),
+                    TypeMember(prog.int_type("int", 4, True), "z", 64),
                 ),
             ),
         )
@@ -868,7 +926,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_class_type has invalid DW_AT_name",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].attribs[0] = tag
@@ -877,7 +935,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_class_type has missing or invalid DW_AT_byte_size",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].attribs.insert(1, size)
@@ -885,10 +943,7 @@ class TestTypes(unittest.TestCase):
         name = dies[0].children[0].attribs.pop(0)
         dies[0].children[0].attribs.insert(0, DwarfAttrib(DW_AT.name, DW_FORM.data1, 0))
         self.assertRaisesRegex(
-            Exception,
-            "DW_TAG_member has invalid DW_AT_name",
-            self.type_from_dwarf,
-            dies,
+            Exception, "DW_TAG_member has invalid DW_AT_name", type_from_dwarf, dies,
         )
         dies[0].children[0].attribs[0] = name
 
@@ -899,23 +954,20 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_member has invalid DW_AT_data_member_location",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].children[0].attribs[1] = location
 
         type_ = dies[0].children[0].attribs.pop(2)
         self.assertRaisesRegex(
-            Exception, "DW_TAG_member is missing DW_AT_type", self.type_from_dwarf, dies
+            Exception, "DW_TAG_member is missing DW_AT_type", type_from_dwarf, dies
         )
         dies[0].children[0].attribs.insert(
             2, DwarfAttrib(DW_AT.type, DW_FORM.string, "foo")
         )
         self.assertRaisesRegex(
-            Exception,
-            "DW_TAG_member has invalid DW_AT_type",
-            self.type_from_dwarf,
-            dies,
+            Exception, "DW_TAG_member has invalid DW_AT_type", type_from_dwarf, dies,
         )
         dies[0].children[0].attribs[2] = type_
 
@@ -947,9 +999,12 @@ class TestTypes(unittest.TestCase):
             ),
         ]
 
-        type_ = struct_type(
-            "foo", 8, (TypeMember(lambda: pointer_type(8, type_), "next"),)
-        )
+        def type_(prog):
+            t = prog.struct_type(
+                "foo", 8, (TypeMember(lambda: prog.pointer_type(t), "next"),)
+            )
+            return t
+
         self.assertFromDwarf(dies, type_)
 
     def test_infinite_cycle(self):
@@ -963,7 +1018,7 @@ class TestTypes(unittest.TestCase):
             ),
         ]
         self.assertRaisesRegex(
-            Exception, "maximum.*depth exceeded", self.type_from_dwarf, dies
+            Exception, "maximum.*depth exceeded", type_from_dwarf, dies
         )
 
     def test_enum(self):
@@ -1003,22 +1058,47 @@ class TestTypes(unittest.TestCase):
             double_die,
         ]
 
-        self.assertFromDwarf(dies, color_type)
+        self.assertFromDwarf(
+            dies,
+            lambda prog: prog.enum_type(
+                "color",
+                prog.int_type("unsigned int", 4, False),
+                (
+                    TypeEnumerator("RED", 0),
+                    TypeEnumerator("GREEN", 1),
+                    TypeEnumerator("BLUE", 2),
+                ),
+            ),
+        )
 
         tag = dies[0].attribs.pop(0)
         self.assertFromDwarf(
-            dies, enum_type(None, color_type.type, color_type.enumerators)
+            dies,
+            lambda prog: prog.enum_type(
+                None,
+                prog.int_type("unsigned int", 4, False),
+                (
+                    TypeEnumerator("RED", 0),
+                    TypeEnumerator("GREEN", 1),
+                    TypeEnumerator("BLUE", 2),
+                ),
+            ),
         )
         dies[0].attribs.insert(0, tag)
 
         children = list(dies[0].children)
         dies[0].children.clear()
-        self.assertFromDwarf(dies, enum_type("color", color_type.type, ()))
+        self.assertFromDwarf(
+            dies,
+            lambda prog: prog.enum_type(
+                "color", prog.int_type("unsigned int ", 4, False), ()
+            ),
+        )
         type_ = dies[0].attribs.pop(1)
         dies[0].attribs.append(
             DwarfAttrib(DW_AT.declaration, DW_FORM.flag_present, True)
         )
-        self.assertFromDwarf(dies, enum_type("color"))
+        self.assertFromDwarf(dies, lambda prog: prog.enum_type("color"))
         del dies[0].attribs[-1]
         dies[0].attribs.insert(1, type_)
         dies[0].children.extend(children)
@@ -1027,15 +1107,23 @@ class TestTypes(unittest.TestCase):
         del dies[0].attribs[1]
         self.assertFromDwarf(
             dies,
-            enum_type("color", int_type("<unknown>", 4, False), color_type.enumerators),
+            lambda prog: prog.enum_type(
+                "color",
+                prog.int_type("<unknown>", 4, False),
+                (
+                    TypeEnumerator("RED", 0),
+                    TypeEnumerator("GREEN", 1),
+                    TypeEnumerator("BLUE", 2),
+                ),
+            ),
         )
         for i, child in enumerate(dies[0].children):
             child.attribs[1] = DwarfAttrib(DW_AT.const_value, DW_FORM.sdata, -i)
         self.assertFromDwarf(
             dies,
-            enum_type(
+            lambda prog: prog.enum_type(
                 "color",
-                int_type("<unknown>", 4, True),
+                prog.int_type("<unknown>", 4, True),
                 (
                     TypeEnumerator("RED", 0),
                     TypeEnumerator("GREEN", -1),
@@ -1048,7 +1136,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_AT_type of DW_TAG_enumeration_type is not an integer type",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         del dies[0].attribs[1]
@@ -1057,7 +1145,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_enumeration_type has missing or invalid DW_AT_byte_size",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].attribs.insert(1, size)
@@ -1067,7 +1155,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_enumeration_type has invalid DW_AT_name",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].attribs[0] = tag
@@ -1076,7 +1164,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_enumerator has missing or invalid DW_AT_name",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].children[0].attribs.insert(0, name)
@@ -1085,7 +1173,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_enumerator is missing DW_AT_const_value",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].children[0].attribs.insert(
@@ -1094,7 +1182,7 @@ class TestTypes(unittest.TestCase):
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_enumerator has invalid DW_AT_const_value",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
         dies[0].children[0].attribs[1] = const_value
@@ -1209,13 +1297,44 @@ class TestTypes(unittest.TestCase):
             )
         )
 
-        self.assertEqual(prog.type("struct point"), point_type)
+        self.assertEqual(
+            prog.type("struct point"),
+            prog.struct_type(
+                "point",
+                8,
+                (
+                    TypeMember(prog.int_type("int", 4, True), "x", 0),
+                    TypeMember(prog.int_type("int", 4, True), "y", 32),
+                ),
+            ),
+        )
         self.assertRaisesRegex(LookupError, "could not find", prog.type, "union point")
-        self.assertEqual(prog.type("union option"), option_type)
+        self.assertEqual(
+            prog.type("union option"),
+            prog.union_type(
+                "option",
+                4,
+                (
+                    TypeMember(prog.int_type("int", 4, True), "i"),
+                    TypeMember(prog.float_type("float", 4), "f"),
+                ),
+            ),
+        )
         self.assertRaisesRegex(
             LookupError, "could not find", prog.type, "struct option"
         )
-        self.assertEqual(prog.type("enum color"), color_type)
+        self.assertEqual(
+            prog.type("enum color"),
+            prog.enum_type(
+                "color",
+                prog.int_type("unsigned int", 4, False),
+                (
+                    TypeEnumerator("RED", 0),
+                    TypeEnumerator("GREEN", 1),
+                    TypeEnumerator("BLUE", 2),
+                ),
+            ),
+        )
         self.assertRaisesRegex(LookupError, "could not find", prog.type, "struct color")
 
     def test_typedef(self):
@@ -1229,13 +1348,15 @@ class TestTypes(unittest.TestCase):
             ),
             int_die,
         ]
-        self.assertFromDwarf(dies, typedef_type("INT", int_type("int", 4, True)))
+        self.assertFromDwarf(
+            dies, lambda prog: prog.typedef_type("INT", prog.int_type("int", 4, True))
+        )
 
         dies[0].attribs.pop(0)
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_typedef has missing or invalid DW_AT_name",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
 
@@ -1245,13 +1366,15 @@ class TestTypes(unittest.TestCase):
                 DW_TAG.typedef, [DwarfAttrib(DW_AT.name, DW_FORM.string, "VOID"),],
             ),
         ]
-        self.assertFromDwarf(dies, typedef_type("VOID", void_type()))
+        self.assertFromDwarf(
+            dies, lambda prog: prog.typedef_type("VOID", prog.void_type())
+        )
 
         dies[0].attribs.pop(0)
         self.assertRaisesRegex(
             Exception,
             "DW_TAG_typedef has missing or invalid DW_AT_name",
-            self.type_from_dwarf,
+            type_from_dwarf,
             dies,
         )
 
@@ -1270,17 +1393,34 @@ class TestTypes(unittest.TestCase):
                 ),
             )
         )
-        self.assertEqual(prog.type("pid_t"), pid_type)
+        self.assertEqual(
+            prog.type("pid_t"),
+            prog.typedef_type("pid_t", prog.int_type("int", 4, True)),
+        )
 
     def test_pointer(self):
         dies = [
-            DwarfDie(DW_TAG.pointer_type, [DwarfAttrib(DW_AT.type, DW_FORM.ref4, 1),],),
+            DwarfDie(
+                DW_TAG.pointer_type,
+                [
+                    DwarfAttrib(DW_AT.type, DW_FORM.ref4, 1),
+                    DwarfAttrib(DW_AT.byte_size, DW_FORM.data1, 8),
+                ],
+            ),
             int_die,
         ]
-        self.assertFromDwarf(dies, pointer_type(8, int_type("int", 4, True)))
+
+        type_ = lambda prog: prog.pointer_type(prog.int_type("int", 4, True))
+        self.assertFromDwarf(dies, type_)
+
+        del dies[0].attribs[1]
+        self.assertFromDwarf(dies, type_)
 
         del dies[0].attribs[0]
-        self.assertFromDwarf(dies, pointer_type(8, void_type()))
+        self.assertFromDwarf(dies, lambda prog: prog.pointer_type(prog.void_type()))
+
+        dies[0].attribs.append(DwarfAttrib(DW_AT.byte_size, DW_FORM.data1, 4))
+        self.assertFromDwarf(dies, lambda prog: prog.pointer_type(prog.void_type(), 4))
 
     def test_array(self):
         dies = [
@@ -1296,7 +1436,9 @@ class TestTypes(unittest.TestCase):
             ),
             int_die,
         ]
-        self.assertFromDwarf(dies, array_type(2, int_type("int", 4, True)))
+        self.assertFromDwarf(
+            dies, lambda prog: prog.array_type(prog.int_type("int", 4, True), 2)
+        )
 
         dies[0].children.append(
             DwarfDie(
@@ -1304,7 +1446,10 @@ class TestTypes(unittest.TestCase):
             ),
         )
         self.assertFromDwarf(
-            dies, array_type(2, array_type(3, int_type("int", 4, True)))
+            dies,
+            lambda prog: prog.array_type(
+                prog.array_type(prog.int_type("int", 4, True), 3), 2
+            ),
         )
 
         dies[0].children.append(
@@ -1313,15 +1458,15 @@ class TestTypes(unittest.TestCase):
             ),
         )
         self.assertFromDwarf(
-            dies, array_type(2, array_type(3, array_type(4, int_type("int", 4, True))))
+            dies,
+            lambda prog: prog.array_type(
+                prog.array_type(prog.array_type(prog.int_type("int", 4, True), 4), 3), 2
+            ),
         )
 
         del dies[0].attribs[0]
         self.assertRaisesRegex(
-            Exception,
-            "DW_TAG_array_type is missing DW_AT_type",
-            self.type_from_dwarf,
-            dies,
+            Exception, "DW_TAG_array_type is missing DW_AT_type", type_from_dwarf, dies,
         )
 
     def test_zero_length_array(self):
@@ -1338,12 +1483,16 @@ class TestTypes(unittest.TestCase):
             ),
             int_die,
         ]
-        self.assertFromDwarf(dies, array_type(0, int_type("int", 4, True)))
+        self.assertFromDwarf(
+            dies, lambda prog: prog.array_type(prog.int_type("int", 4, True), 0)
+        )
 
         dies[0].children[0].attribs[0] = DwarfAttrib(
             DW_AT.upper_bound, DW_FORM.sdata, -1
         )
-        self.assertFromDwarf(dies, array_type(0, int_type("int", 4, True)))
+        self.assertFromDwarf(
+            dies, lambda prog: prog.array_type(prog.int_type("int", 4, True), 0)
+        )
 
     def test_incomplete_array(self):
         dies = [
@@ -1354,10 +1503,14 @@ class TestTypes(unittest.TestCase):
             ),
             int_die,
         ]
-        self.assertFromDwarf(dies, array_type(None, int_type("int", 4, True)))
+        self.assertFromDwarf(
+            dies, lambda prog: prog.array_type(prog.int_type("int", 4, True))
+        )
 
         del dies[0].children[0]
-        self.assertFromDwarf(dies, array_type(None, int_type("int", 4, True)))
+        self.assertFromDwarf(
+            dies, lambda prog: prog.array_type(prog.int_type("int", 4, True))
+        )
 
     def test_incomplete_array_of_array(self):
         # int [3][]
@@ -1376,7 +1529,10 @@ class TestTypes(unittest.TestCase):
             int_die,
         ]
         self.assertFromDwarf(
-            dies, array_type(None, array_type(3, int_type("int", 4, True)))
+            dies,
+            lambda prog: prog.array_type(
+                prog.array_type(prog.int_type("int", 4, True), 3)
+            ),
         )
 
     def test_array_of_zero_length_array(self):
@@ -1399,7 +1555,9 @@ class TestTypes(unittest.TestCase):
             int_die,
         ]
 
-        type_ = array_type(3, array_type(0, int_type("int", 4, True)))
+        type_ = lambda prog: prog.array_type(
+            prog.array_type(prog.int_type("int", 4, True), 0), 3
+        )
         self.assertFromDwarf(dies, type_)
 
         # GCC < 9.0.
@@ -1440,8 +1598,11 @@ class TestTypes(unittest.TestCase):
             int_die,
         ]
 
-        type_ = array_type(
-            3, typedef_type("ZARRAY", array_type(0, int_type("int", 4, True)))
+        type_ = lambda prog: prog.array_type(
+            prog.typedef_type(
+                "ZARRAY", prog.array_type(prog.int_type("int", 4, True), 0)
+            ),
+            3,
         )
         self.assertFromDwarf(dies, type_)
 
@@ -1483,12 +1644,12 @@ class TestTypes(unittest.TestCase):
 
         self.assertFromDwarf(
             dies,
-            struct_type(
+            lambda prog: prog.struct_type(
                 None,
                 4,
                 (
-                    TypeMember(int_type("int", 4, True), "i"),
-                    TypeMember(array_type(None, int_type("int", 4, True)), "a", 32),
+                    TypeMember(prog.int_type("int", 4, True), "i"),
+                    TypeMember(prog.array_type(prog.int_type("int", 4, True)), "a", 32),
                 ),
             ),
         )
@@ -1534,14 +1695,14 @@ class TestTypes(unittest.TestCase):
 
         self.assertFromDwarf(
             dies,
-            struct_type(
+            lambda prog: prog.struct_type(
                 None,
                 4,
                 (
-                    TypeMember(int_type("int", 4, True), "i"),
+                    TypeMember(prog.int_type("int", 4, True), "i"),
                     TypeMember(
-                        typedef_type(
-                            "FARRAY", array_type(None, int_type("int", 4, True))
+                        prog.typedef_type(
+                            "FARRAY", prog.array_type(prog.int_type("int", 4, True))
                         ),
                         "a",
                         32,
@@ -1581,8 +1742,10 @@ class TestTypes(unittest.TestCase):
             int_die,
         ]
 
-        type_ = struct_type(
-            None, 4, (TypeMember(array_type(0, int_type("int", 4, True)), "a"),)
+        type_ = lambda prog: prog.struct_type(
+            None,
+            4,
+            (TypeMember(prog.array_type(prog.int_type("int", 4, True), 0), "a"),),
         )
         self.assertFromDwarf(dies, type_)
 
@@ -1629,34 +1792,37 @@ class TestTypes(unittest.TestCase):
             int_die,
         ]
 
-        type_ = struct_type(
+        type_ = lambda prog: prog.struct_type(
             "foo",
             4,
             (
                 TypeMember(
-                    typedef_type("ZARRAY", array_type(0, int_type("int", 4, True))), "a"
+                    prog.typedef_type(
+                        "ZARRAY", prog.array_type(prog.int_type("int", 4, True), 0)
+                    ),
+                    "a",
                 ),
             ),
         )
         self.assertFromDwarf(dies, type_)
 
-        farray_zarray = typedef_type(
-            "ZARRAY", array_type(None, int_type("int", 4, True))
+        farray_zarray = lambda prog: prog.typedef_type(
+            "ZARRAY", prog.array_type(prog.int_type("int", 4, True))
         )
 
         # GCC < 9.0.
         del dies[1].children[0]
         prog = dwarf_program(dies)
-        self.assertEqual(prog.type("struct foo"), type_)
+        self.assertEqual(prog.type("struct foo"), type_(prog))
         # Although the ZARRAY type must be a zero-length array in the context
         # of the structure, it could still be an incomplete array if used
         # elsewhere.
-        self.assertEqual(prog.type("ZARRAY"), farray_zarray)
+        self.assertEqual(prog.type("ZARRAY"), farray_zarray(prog))
 
         # Make sure it still works if we parse the array type first.
         prog = dwarf_program(dies)
-        self.assertEqual(prog.type("ZARRAY"), farray_zarray)
-        self.assertEqual(prog.type("struct foo"), type_)
+        self.assertEqual(prog.type("ZARRAY"), farray_zarray(prog))
+        self.assertEqual(prog.type("struct foo"), type_(prog))
 
     def test_zero_length_array_not_last_member(self):
         # struct {
@@ -1697,12 +1863,12 @@ class TestTypes(unittest.TestCase):
             int_die,
         ]
 
-        type_ = struct_type(
+        type_ = lambda prog: prog.struct_type(
             None,
             4,
             (
-                TypeMember(array_type(0, int_type("int", 4, True)), "a"),
-                TypeMember(int_type("int", 4, True), "i"),
+                TypeMember(prog.array_type(prog.int_type("int", 4, True), 0), "a"),
+                TypeMember(prog.int_type("int", 4, True), "i"),
             ),
         )
         self.assertFromDwarf(dies, type_)
@@ -1750,12 +1916,12 @@ class TestTypes(unittest.TestCase):
             int_die,
         ]
 
-        type_ = union_type(
+        type_ = lambda prog: prog.union_type(
             None,
             4,
             (
-                TypeMember(int_type("int", 4, True), "i"),
-                TypeMember(array_type(0, int_type("int", 4, True)), "a"),
+                TypeMember(prog.int_type("int", 4, True), "i"),
+                TypeMember(prog.array_type(prog.int_type("int", 4, True), 0), "a"),
             ),
         )
         self.assertFromDwarf(dies, type_)
@@ -1766,7 +1932,9 @@ class TestTypes(unittest.TestCase):
 
     def test_pointer_size(self):
         prog = dwarf_program(base_type_dies, bits=32)
-        self.assertEqual(prog.type("int *"), pointer_type(4, int_type("int", 4, True)))
+        self.assertEqual(
+            prog.type("int *"), prog.pointer_type(prog.int_type("int", 4, True), 4)
+        )
 
     def test_function(self):
         # int foo(char)
@@ -1786,9 +1954,9 @@ class TestTypes(unittest.TestCase):
         ]
         self.assertFromDwarf(
             dies,
-            function_type(
-                int_type("int", 4, True),
-                (TypeParameter(int_type("char", 1, True)),),
+            lambda prog: prog.function_type(
+                prog.int_type("int", 4, True),
+                (TypeParameter(prog.int_type("char", 1, True)),),
                 False,
             ),
         )
@@ -1797,9 +1965,9 @@ class TestTypes(unittest.TestCase):
         dies[0].children[0].attribs.append(DwarfAttrib(DW_AT.name, DW_FORM.string, "c"))
         self.assertFromDwarf(
             dies,
-            function_type(
-                int_type("int", 4, True),
-                (TypeParameter(int_type("char", 1, True), "c"),),
+            lambda prog: prog.function_type(
+                prog.int_type("int", 4, True),
+                (TypeParameter(prog.int_type("char", 1, True), "c"),),
                 False,
             ),
         )
@@ -1809,24 +1977,32 @@ class TestTypes(unittest.TestCase):
         dies[0].children.append(DwarfDie(DW_TAG.unspecified_parameters, []))
         self.assertFromDwarf(
             dies,
-            function_type(
-                int_type("int", 4, True),
-                (TypeParameter(int_type("char", 1, True)),),
+            lambda prog: prog.function_type(
+                prog.int_type("int", 4, True),
+                (TypeParameter(prog.int_type("char", 1, True)),),
                 True,
             ),
         )
 
         # int foo()
         del dies[0].children[0]
-        self.assertFromDwarf(dies, function_type(int_type("int", 4, True), (), True))
+        self.assertFromDwarf(
+            dies,
+            lambda prog: prog.function_type(prog.int_type("int", 4, True), (), True),
+        )
 
         # int foo(void)
         del dies[0].children[0]
-        self.assertFromDwarf(dies, function_type(int_type("int", 4, True), (), False))
+        self.assertFromDwarf(
+            dies,
+            lambda prog: prog.function_type(prog.int_type("int", 4, True), (), False),
+        )
 
         # void foo(void)
         del dies[0].attribs[0]
-        self.assertFromDwarf(dies, function_type(void_type(), (), False))
+        self.assertFromDwarf(
+            dies, lambda prog: prog.function_type(prog.void_type(), (), False)
+        )
 
     def test_incomplete_array_parameter(self):
         # void foo(int [])
@@ -1848,9 +2024,9 @@ class TestTypes(unittest.TestCase):
         ]
         self.assertFromDwarf(
             dies,
-            function_type(
-                void_type(),
-                (TypeParameter(array_type(None, int_type("int", 4, True))),),
+            lambda prog: prog.function_type(
+                prog.void_type(),
+                (TypeParameter(prog.array_type(prog.int_type("int", 4, True))),),
                 False,
             ),
         )
@@ -1860,18 +2036,18 @@ class TestTypes(unittest.TestCase):
             if re.fullmatch("C[0-9]*", name):
                 self.assertFromDwarf(
                     (int_die,),
-                    int_type("int", 4, True, language=Language.C),
+                    lambda prog: prog.int_type("int", 4, True, language=Language.C),
                     lang=lang,
                 )
 
         self.assertFromDwarf(
             (int_die,),
-            int_type("int", 4, True, language=DEFAULT_LANGUAGE),
+            lambda prog: prog.int_type("int", 4, True, language=DEFAULT_LANGUAGE),
             lang=DW_LANG.BLISS,
         )
 
 
-class TestObjects(ObjectTestCase):
+class TestObjects(TestCase):
     def test_constant(self):
         dies = [
             int_die,
@@ -1920,42 +2096,42 @@ class TestObjects(ObjectTestCase):
             ),
         ]
 
-        type_ = enum_type(
+        prog = dwarf_program(dies)
+        type_ = prog.enum_type(
             "color",
-            int_type("int", 4, True),
+            prog.int_type("int", 4, True),
             (
                 TypeEnumerator("RED", 0),
                 TypeEnumerator("GREEN", 1),
                 TypeEnumerator("BLUE", 2),
             ),
         )
-        prog = dwarf_program(dies)
         self.assertEqual(prog["BLUE"], Object(prog, type_, value=2))
 
         dies[0] = unsigned_int_die
-        type_ = enum_type(
+        prog = dwarf_program(dies)
+        type_ = prog.enum_type(
             "color",
-            int_type("unsigned int", 4, False),
+            prog.int_type("unsigned int", 4, False),
             (
                 TypeEnumerator("RED", 0),
                 TypeEnumerator("GREEN", 1),
                 TypeEnumerator("BLUE", 2),
             ),
         )
-        prog = dwarf_program(dies)
         self.assertEqual(prog["GREEN"], Object(prog, type_, value=1))
 
         del dies[1].attribs[0]
-        type_ = enum_type(
+        prog = dwarf_program(dies)
+        type_ = prog.enum_type(
             None,
-            int_type("unsigned int", 4, False),
+            prog.int_type("unsigned int", 4, False),
             (
                 TypeEnumerator("RED", 0),
                 TypeEnumerator("GREEN", 1),
                 TypeEnumerator("BLUE", 2),
             ),
         )
-        prog = dwarf_program(dies)
         self.assertEqual(
             prog.object("RED", FindObjectFlags.CONSTANT), Object(prog, type_, value=0)
         )
@@ -1978,12 +2154,20 @@ class TestObjects(ObjectTestCase):
                 ],
             ),
         ]
-        type_ = function_type(
-            int_type("int", 4, True), (TypeParameter(int_type("int", 1, True)),), False
-        )
 
         prog = dwarf_program(dies)
-        self.assertEqual(prog["abs"], Object(prog, type_, address=0x7FC3EB9B1C30))
+        self.assertEqual(
+            prog["abs"],
+            Object(
+                prog,
+                prog.function_type(
+                    prog.int_type("int", 4, True),
+                    (TypeParameter(prog.int_type("int", 1, True)),),
+                    False,
+                ),
+                address=0x7FC3EB9B1C30,
+            ),
+        )
         self.assertEqual(prog.object("abs", FindObjectFlags.FUNCTION), prog["abs"])
         self.assertRaisesRegex(
             LookupError,
@@ -2019,7 +2203,7 @@ class TestObjects(ObjectTestCase):
         prog = dwarf_program(dies)
         self.assertEqual(
             prog["x"],
-            Object(prog, int_type("int", 4, True), address=0xFFFFFFFF01020304),
+            Object(prog, prog.int_type("int", 4, True), address=0xFFFFFFFF01020304),
         )
         self.assertEqual(prog.object("x", FindObjectFlags.VARIABLE), prog["x"])
         self.assertRaisesRegex(
@@ -2061,7 +2245,7 @@ class TestObjects(ObjectTestCase):
             ]
             prog = dwarf_program(dies)
             self.assertEqual(
-                prog["x"], Object(prog, int_type("int", 4, True), 1),
+                prog["x"], Object(prog, prog.int_type("int", 4, True), 1),
             )
 
     def test_const_unsigned(self):
@@ -2085,7 +2269,7 @@ class TestObjects(ObjectTestCase):
             ]
             prog = dwarf_program(dies)
             self.assertEqual(
-                prog["x"], Object(prog, int_type("unsigned int", 4, False), 1),
+                prog["x"], Object(prog, prog.int_type("unsigned int", 4, False), 1),
             )
 
     def test_const_block(self):
@@ -2131,7 +2315,19 @@ class TestObjects(ObjectTestCase):
         ]
         prog = dwarf_program(dies)
         self.assertEqual(
-            prog["p"], Object(prog, point_type, {"x": 1, "y": 2}),
+            prog["p"],
+            Object(
+                prog,
+                prog.struct_type(
+                    "point",
+                    8,
+                    (
+                        TypeMember(prog.int_type("int", 4, True), "x"),
+                        TypeMember(prog.int_type("int", 4, True), "y", 32),
+                    ),
+                ),
+                {"x": 1, "y": 2},
+            ),
         )
 
         dies[2].attribs[2] = DwarfAttrib(
